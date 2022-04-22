@@ -65,12 +65,12 @@ class board {
         // int found_mine = 0;
         // int found_non_mine = 0;
         
-        board(int a, int b){
+        board(int a, int b, int s){
             w = a;
             h = b;
             mine_count = w*h/5;//minecount = 0.2 of the number of squares in total
             cout << "mine count: "<<mine_count<<endl;
-            initialize_board();
+            initialize_board(s);
         }
         
         square random_select(){
@@ -112,9 +112,9 @@ class board {
             return count;
         }
 
-        void plant_mines(){
+        void plant_mines(int s){
             //generate mine
-            srand(time(0));
+            srand(s);
             int row,col;
             for (int i=0;i<mine_count;i++){//there might be duplicates 
                 row = rand() % w;
@@ -133,7 +133,7 @@ class board {
             }
         }
 
-        void initialize_board(){
+        void initialize_board(int s){
             for (int i=0;i<w;i++){
                 vector<int> temp1;
                 vector<int> temp2;
@@ -144,7 +144,7 @@ class board {
                     revealed_board[i].push_back(9);
                 }    
             }
-            plant_mines();
+            plant_mines(s);
             get_numbers_in_square();
         }
 
@@ -279,7 +279,8 @@ int main(int argc, char *argv[]){
     //read in inputs, initiate the board and the game
     int width = stoi(string(argv[1]));
     int height = stoi(string(argv[2]));
-    board game(width,height);
+    int seed = stoi(string(argv[3]));
+    board game(width,height,seed);
     //reveal the upperleft square
     struct square upperleft={0,0};
     game.reveal(upperleft);
@@ -335,6 +336,7 @@ int main(int argc, char *argv[]){
             //use for loop to find all possible solutions
             bool possible_solution;
             for (int k=0;k<pow(2,vars.size());k++){//each variable has two values so there are 2^n combinations
+                // if (k % 1000 == 0){cout << "process: " <<k<< "/"<<pow(2,vars.size())<<endl;}
                 map<square,int> temp_sol;
                 //we copy a solution so we have the deterministic solutions and the non determined ones everytime
                 //we will use binary number to assign values for example for n=3, 2^3=8, 7 in binary is 111 then we take all the values to be 1, if k=5=101 then take 101
@@ -404,11 +406,12 @@ int main(int argc, char *argv[]){
                 }
             }
             if (!find_some_deterministic){
+                sol[vars[minimum_index]] = 0;//we find the square with minimum likelihood of being a mine, so assign it to be non-mine
                 // cout << "index is " << minimum_index << endl;
                 // cout << "the least likely square is ";
                 // vars[minimum_index].print_square();
                 // cout <<endl;
-                sol[vars[minimum_index]] = 0;//we find the square with minimum likelihood of being a mine, so assign it to be non-mine
+                
             }
             
             // cout << "after csp values from sol" <<endl;
