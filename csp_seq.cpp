@@ -287,9 +287,28 @@ int main(int argc, char *argv[]){
     if (game.failure){cout << "upperleft is a mine"<<endl;}
     game.print_board(true);
     //create a vector to store constraints(which is also vectors of squares)
-    vector<constraint> s = {};
+    vector<constraint> s;
     //update the constraints
     s.push_back(give_constraint(upperleft,game));
+
+    //three global vars vector to store variables
+    //vars for all the variables we are currently using
+    //pre vars are the variables we were using in the last iteration
+    //added vars are the new variables compared to pre_vars
+    vector<square> vars;
+    vector<square> prev_vars;
+    vector<square> added_vars;
+    //use a vector to store all the possible solutions for the current iteration
+    vector<map<square,int>> sols;
+    //store the partial solutions in this prev_sols
+    //for new variables, we will add them to the solutoins we already had
+    //e.g. if new variable x, we already have sols = {y=1,z=0}, then we will only try temp_sol = {x=0, y=1,z=0}, temp_sol = {x=1, y=1,z=0}
+    //hence reduce the redundant work to go over the search tree every time
+    vector<map<square,int>> prev_sols;
+    //we need this flag because at the very beginning or everytime we encounter the situation that all the constraints are satisfied in s
+    //then added_vars = vars
+    bool initial_flag = true;
+    //just a counter
     int loop_count =0;
     while (!(game.gameover || game.failure)){
         loop_count ++;
@@ -297,77 +316,168 @@ int main(int argc, char *argv[]){
         // for (int i=0;i<s.size();i++){
         //     s[i].print_constraint();
         // }
-        vector<square> vars = related_squares(s);//get the related variables ready for CSP
+        //we want to know what are the new variables compared to last iteration
+        added_vars = {};
+        if (initial_flag){//at the very beginning, added_vars is just vars
+            added_vars = related_squares(s);
+            vars = added_vars;
+            initial_flag = false;
+        }
+        else{
+            vars = related_squares(s);//get all the related variables
+            for (int i=0;i<vars.size();i++){
+                if ((find(prev_vars.begin(),prev_vars.end(),vars[i]) == prev_vars.end())){//check if every variable in vars is in prev_vars
+                    added_vars.push_back(vars[i]);//add the new comer into the added_vars
+                }
+            }
+        }
+        // cout << "added " << added_vars.size() << " variables" <<endl;
+        // cout << "added vars contains these "<<endl;
+        // for (int i=0;i<added_vars.size();i++){
+        //     added_vars[i].print_square();
+        //     cout << " "<<endl;
+        // }
         
-        //use a vector to store all the possible solutions
-        vector<map<square,int>> sols;
-        //use a map to store the value assignments
+        //use a map to store the value assignments, we will only store assignments that we are 100% sure
         map<square,int> sol;
         //first step: if constraint = 0 or every variable is a mine, we get some deterministic solutions
-        //if we have some of the values figured out, then no need to CSP
-        bool csp_necessary = true;
+        //if we have some of the values figured out, then no need to guess and pick a square
+        bool guess_necessary = true;
         for (int i=0;i<s.size();i++){
-            if ((s[i].value) == 0){//constraint = 0, all neighbors not mine
+            //constraint = 0, all neighbors not mine
+            if ((s[i].value) == 0){
                 // cout << "this is a no mine neighbor constraint"<<endl;
                 // s[i].print_constraint();
-                csp_necessary = false;
+                guess_necessary = false;
+                //add them to solution, reveal the squares on board
                 for (int j=0;j<s[i].vars.size();j++){
                     sol[s[i].vars[j]] = 0;
                     game.reveal(s[i].vars[j]);
                 }
             }
-            else if ((s[i].value) == s[i].vars.size()){//neighbor count=constraint value, all neighbors mine
+            else if ((s[i].value) == s[i].vars.size()){
+                //neighbor count=constraint value, all neighbors mine
                 // cout << "this is a all mine neighbor constraint"<<endl;
                 // s[i].print_constraint();
-                csp_necessary = false;
+                guess_necessary = false;
+                //add them to solution, mark the mines on board
                 for (int j=0;j<s[i].vars.size();j++){
                     sol[s[i].vars[j]] = 1;
                     game.mark(s[i].vars[j]);
                 }
             }
         }
-        
-        if (csp_necessary){
+        //since we already have some solution for the added_vars
+        //we want to update the added_vars
+        //so that when we go into the CSP, we iterate as few iterations as possible
+        vector<square> temp_vars;
+        //check if variable in added_vars already exist in solution, if not, add it to temp_vars
+        for (int i=0;i<added_vars.size();i++){
+            if (sol.find(added_vars[i]) == sol.end()){
+                temp_vars.push_back(added_vars[i]);
+            }
+        }
+        added_vars = temp_vars;
+        //indeterministic count is the number of variables that are added in this iteration
+        //and yet we dont have a deterministic value
+        //so we will do CSP and find all the possible solutions and store them
+        int indeterministic_count = added_vars.size();
+        // cout << "indeterministic count " << indeterministic_count <<endl;
+        //add new found out value in solution to prev_solutions
+        for (int i=0;i<vars.size();i++){
+            if (sol.find(vars[i]) != sol.end()){
+                for (int j=0;j<prev_sols.size();j++){
+                    prev_sols[j][vars[i]] = sol[vars[i]];
+                }
+            }
+        }
+        //if there is no new variable, then we dont have to do CSP to find potential solutions
+        //otherwise, we always do a CSP(for speed reasons)
+        //imagine we have 5 variables we don't have solutions from previous iteration
+        //and now we have 5 more variables from this iteration
+        //then the total assignment will be 2^10
+        //if we do a CSP in the previous iteration, 2^5
+        //and do a CSP based on the solutions we got from previous iteration, lets say 10 possible solutions
+        //then still 2^5 + 10*2^5 << 2^10, way faster
+        if (!added_vars.empty()){
             // cout << "vars contains these "<<endl;
             // for (int i=0;i<vars.size();i++){
             //         vars[i].print_square();
             //         cout << " "<<endl;
             // }
             //use for loop to find all possible solutions
+            sols = {};
             bool possible_solution;
-            for (int k=0;k<pow(2,vars.size());k++){//each variable has two values so there are 2^n combinations
-                // if (k % 1000 == 0){cout << "process: " <<k<< "/"<<pow(2,vars.size())<<endl;}
-                map<square,int> temp_sol;
-                //we copy a solution so we have the deterministic solutions and the non determined ones everytime
-                //we will use binary number to assign values for example for n=3, 2^3=8, 7 in binary is 111 then we take all the values to be 1, if k=5=101 then take 101
-                // cout << "assignment: "<<endl;
-                string to_binary = bitset< 64 >(k).to_string();
-                for (int i=0;i<vars.size();i++){
-                    char a = to_binary[63-i];
-                    temp_sol[vars[i]] = a-'0';
-                    // temp_sol[vars[i]] = (k/(i*2)) % 2;
-                    // cout << temp_sol[vars[i]] << " ";
+            //each variable has two values so there are 2^n combinations
+            //we loop through all the possible assignments/combinations
+            for (int k=0;k<pow(2,indeterministic_count);k++){
+                //a progress bar
+                int twentyfivepercent = 1+ (pow(2,indeterministic_count)/4);
+                if (k % twentyfivepercent == 0){cout << "process: " <<k<< "/"<<pow(2,indeterministic_count)<<endl;}
+                //prev_sols can be empty the first time we have an indeterministic variable
+                if (prev_sols.empty()){
+                    map<square,int> temp_sol;
+                    //use digits of binary version of k to give assignment
+                    //this ensures that each iteration, we have a different assignment, 
+                    //and this will go over all the possible assignments
+                    string to_binary = bitset< 64 >(k).to_string();
+                    for (int i=0;i<added_vars.size();i++){
+                        char a = to_binary[63-i];
+                        temp_sol[added_vars[i]] = a-'0';
+                        // cout << temp_sol[vars[i]] << " ";
+                    }
+                    possible_solution = true;
+                    //everytime we have an possible assignment, we check it will all the constraints we have
+                    for (int j=0;j<s.size();j++){
+                        if (!s[j].check_satisfaction(temp_sol)){
+                            possible_solution = false;
+                            break;}//if one constraint is not satisfied
+                    }
+                    if (possible_solution){sols.push_back(temp_sol);}//if possible, we find a solution, add it to sols
                 }
-                // cout <<endl;
-                possible_solution = true;
-                for (int j=0;j<s.size();j++){
-                    if (!s[j].check_satisfaction(temp_sol)){
-                        possible_solution = false;
-                        break;}//if one constraint is not satisfied
+                else{
+                    //use digits of binary version of k to give assignment
+                    //this ensures that each iteration, we have a different assignment, 
+                    //and this will go over all the possible assignments
+                    string to_binary = bitset< 64 >(k).to_string();
+                    for (int p=0;p<prev_sols.size();p++){
+                        //this time we have previous solutions, so we copy one of it and make assignments
+                        //to the indeterministic variables
+                        //all variables in the solutions in previous solutions are either deterministic ones that we just added above
+                        //or possible solutions we got from previous iteration
+                        map<square,int> temp_sol(prev_sols[p]);
+                        for (int i=0;i<added_vars.size();i++){
+                            char a = to_binary[63-i];
+                            temp_sol[added_vars[i]] = a-'0';
+                            // cout << temp_sol[vars[i]] << " ";
+                        }
+                        possible_solution = true;
+                        for (int j=0;j<s.size();j++){
+                            if (!s[j].check_satisfaction(temp_sol)){
+                                possible_solution = false;
+                                break;}//if one constraint is not satisfied
+                        }
+                        if (possible_solution){sols.push_back(temp_sol);}//if not continue, we find a solution
+                    }
                 }
-                if (possible_solution){sols.push_back(temp_sol);}//if not continue, we find a solution
+                
             }
-            // for (int z=0;z<sols.size();z++){
-            //     cout << "potention solution "<< z<< ": " << endl;
-            //     for (int y=0;y<vars.size();y++){
-            //         if (sols[z].find(vars[y]) != sols[z].end()){
-            //             vars[y].print_square();
-            //             cout <<  " " << sols[z][vars[y]] << endl; 
-            //         }
-            //     }
-            // }
+            
+            
+        }
+        // for (int z=0;z<sols.size();z++){
+        //     cout << "potention solutions "<< z<< ": " << endl;
+        //     for (int y=0;y<vars.size();y++){
+        //         if (sols[z].find(vars[y]) != sols[z].end()){
+        //             vars[y].print_square();
+        //             cout <<  " " << sols[z][vars[y]] << endl; 
+        //         }
+        //     }
+        // }
+        //if we have to make a guess
+        if (guess_necessary){
             //now we have all the possible solutions, lets calculate the probability of revealing a square and getting a mine
-            //choose that square and add that to vector sol
+            //choose the square with least probability and add that to vector sol
             int number_of_sols = sols.size();
             vector<int> count_of_mine(vars.size(),0);//a vector of the count of the times this variable is a mine in all the possible solutions
             for (int z=0;z<number_of_sols;z++){
@@ -382,8 +492,6 @@ int main(int argc, char *argv[]){
             bool find_some_deterministic =false;
             // cout << "number of solutions: " <<number_of_sols <<endl;
             for (int x=0;x<vars.size();x++){
-                
-                // cout << count_of_mine[x] << " ";
                 if (count_of_mine[x]>0 && count_of_mine[x]<minimum_mine){
                     minimum_mine = count_of_mine[x];
                     minimum_index = x;
@@ -413,18 +521,10 @@ int main(int argc, char *argv[]){
                 // cout <<endl;
                 
             }
-            
-            // cout << "after csp values from sol" <<endl;
-            // for (int i=0;i<vars.size();i++){
-            //     if (sol.find(vars[i]) != sol.end()){
-            //         vars[i].print_square();
-            //         cout << " "<<endl;
-            //     }
-            // }
         }
-        else{
-            cout << "no need to CSP" <<endl;}
-        
+        //copy the partial solutions into prev_sols to be used in next CSP
+        prev_sols = sols;
+        prev_vars = vars;
         //reveal the deterministic values and the least probability square that has a mine from vector sol
         //update the constraints
         s={};
@@ -452,10 +552,8 @@ int main(int argc, char *argv[]){
                         s.push_back(give_constraint(temp_sq,game));
                     }
                 }
-                
             }
         }
-        
 
         game.print_board();
         if (game.check_gameover()){
